@@ -50,6 +50,10 @@ var scorePopups = [];
 var nearMissPoints = 20;
 var nearMisses = 0;
 
+// other
+var debugMode = false;
+var gameState = { running: true, over: false, paused: false };
+
 function setup() {
   createCanvas(_w, _h);
   noStroke();
@@ -79,6 +83,9 @@ function setup() {
 function draw() {
   background(background_color);
 
+  // debug
+  if (debugMode) enemies.forEach(drawDebug);
+
   // 1) display npcs
   npcs.forEach((npc) => drawNPC(npc));
 
@@ -100,7 +107,26 @@ function draw() {
   playGame();
 }
 
+function toggleBool(bool) {
+  return !bool;
+}
+
+function handleKeyEvents(key) {
+  if (key === " " || key.toLowerCase() === "p") {
+    // pausing the game
+    gameState.running = gameState.paused;
+    gameState.over = false;
+    gameState.paused = !gameState.paused;
+    console.log(gameState);
+  }
+}
+// Trigger key events only once per press
+function keyPressed() {
+  handleKeyEvents(key);
+}
+
 function playGame() {
+  if (!gameState.running) return; // Skip logic if paused or over
   // increase player speed
   // if (keyIsDown(65)) playerSpeed += 0.12; // a/A key
 
@@ -117,8 +143,7 @@ function playGame() {
   // move enemy
   enemies.forEach((enemy) => {
     /* debug characters */
-    // drawDebug(enemy);
-    // drawDebug(playerActor);
+    // drawDebug(enemy); drawDebug(playerActor);
 
     // control playerActor
     if (keyIsDown(37)) playerActor.x -= playerActorMoveDistance; // left
@@ -141,6 +166,7 @@ function playGame() {
       // showPoints(playerActor.x, playerActor.y, "+10 Near Miss");
       console.log("near miss");
     }
+
     // collision
     if (!collides(enemy, playerActor)) {
       enemy.y += enemy.gravity;
@@ -149,7 +175,7 @@ function playGame() {
       background_color = "#fff";
       playerActor.bgcolor = "red";
       enemy.bgcolor = "red";
-      // game over
+      // game over (it will update gameState respectively)
       gameOver();
     }
 
@@ -290,6 +316,10 @@ function drawNPC(npc) {
 }
 
 function gameOver() {
+  // update the states
+  gameState.running = !gameState.running;
+  gameState.over = true;
+  gameState.paused = false;
   noLoop();
 }
 
