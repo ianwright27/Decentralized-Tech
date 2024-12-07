@@ -24,6 +24,15 @@ var enemyActor = {
   gravity: 1,
   nearMissed: false,
 };
+var packageActor = {
+  x: _w * 0.5,
+  y: _h * 0.1,
+  w: 20 * size_factor.w,
+  h: 20 * size_factor.w,
+  bgcolor: "rgb(208, 0, 255)",
+  gravity: 1,
+  isCollected: false,
+};
 var npcOne = {
   x: _w * 0.5,
   y: _h * 0.1,
@@ -45,20 +54,60 @@ var playerActorMoveDistance = 5; // 5 - standard
 var playerSpeed = 1;
 
 // ui
-var score = 0;
+var score = 0; // score = 2000;
 var scorePopups = [];
 var nearMissPoints = 20;
 var nearMisses = 0;
+var offScreenPenalties = 0;
+var maxOffScreenPenalties = 100; // before game over
+var reputationScore = 0;
+var repScorePoints = 50; // by default
 
 // other
 var debugMode = false;
 var gameState = { running: true, over: false, paused: false };
+var packageGenerated = false;
+var packageGenerationProbability = 0.05; // 5 % // packageGenerationProbability = 0.8;
+var packageGenerationRandom = 0.5; // initial
+var packageGenerationInterval = setInterval(() => {
+  packageGenerationRandom = Math.random();
+  console.log("package gen. random: ", packageGenerationRandom);
+}, 1000 /* every 3 seconds */);
+var attempts = 1;
+var maxRestarts = 3; // until scores expire
+
+function restartGame() {
+  if (attempts > maxRestarts) {
+    // forget the scores
+    score = 0;
+    reputationScore = 0;
+    nearMisses = 0;
+    offScreenPenalties = 0;
+  }
+  // scorePopups = [];
+  npcs = [];
+  enemies = [];
+  gameState = { running: true, over: false, paused: false };
+  playerActor = {
+    x: _w * 0.5,
+    y: _h * 0.8,
+    w: 50 * size_factor.w,
+    h: 50 * size_factor.h,
+    bgcolor: "rgb(232,230,226)",
+    gravity: 0,
+  };
+  packageGenerated = false;
+  setup(); // Reinitialize game setup
+  draw();
+  loop();
+}
 
 function setup() {
   createCanvas(_w, _h);
   noStroke();
   // initial settings
   playerActor.x = (_w - playerActor.w) / 2;
+  // packageActor.x = (_w - playerActor.w) / 2;
   // create enemies
   for (var i = 0; i < max_enemies; ++i) {
     // Call the function to generate enemies without overlap
@@ -89,6 +138,9 @@ function draw() {
   // 1) display npcs
   npcs.forEach((npc) => drawNPC(npc));
 
+  // 3) display packageActor
+  if (packageGenerated) drawPackageActor(packageActor);
+
   // 2) display enemies
   enemies.forEach((enemy) => {
     drawEnemyActor(enemy);
@@ -107,29 +159,50 @@ function draw() {
   playGame();
 }
 
-function toggleBool(bool) {
-  return !bool;
-}
-
-function handleKeyEvents(key) {
-  if (key === " " || key.toLowerCase() === "p") {
-    // pausing the game
-    gameState.running = gameState.paused;
-    gameState.over = false;
-    gameState.paused = !gameState.paused;
-    console.log(gameState);
-  }
-}
-// Trigger key events only once per press
-function keyPressed() {
-  handleKeyEvents(key);
-}
-
 function playGame() {
   if (!gameState.running) return; // Skip logic if paused or over
-  // increase player speed
-  // if (keyIsDown(65)) playerSpeed += 0.12; // a/A key
 
+  // handle packages
+  // ------------------
+  // generate packages
+  var r = random();
+  if (
+    !packageGenerated &&
+    packageGenerationRandom < packageGenerationProbability
+  ) {
+    generatePackage();
+  }
+  // move the package
+  if (packageGenerated) {
+    // move the package
+    packageActor.y += packageActor.gravity;
+
+    // check collision
+    if (collides(packageActor, playerActor) && !packageActor.isCollected) {
+      applyVisualEffect(playerActor);
+      reputationScore += repScorePoints;
+      // do some math (offScreenPenalties & reputationScore)
+      if (offScreenPenalties >= reputationScore) {
+        offScreenPenalties -= reputationScore; // Offset penalties by reputation
+        reputationScore = 0; // Fully consumed
+      } else {
+        reputationScore -= offScreenPenalties; // Partially consume reputation
+        offScreenPenalties = 0; // Fully offset penalties
+      }
+      packageActor.isCollected = true;
+    }
+
+    if (packageActor.y > _h) {
+      // reset to false so it can be generated again
+      packageGenerated = false;
+      // reset to false so it can be collected again
+      packageActor.isCollected = false;
+    }
+  }
+  // -------------------------------------------------
+
+  // handle npcs
+  // ------------------
   // move the npcs
   npcs.forEach((npc) => {
     npc.y += npc.gravity * playerSpeed;
@@ -139,15 +212,30 @@ function playGame() {
       npc.y = -(npc.h * 2); // start from top again
     }
   });
+  // -------------------------------------------------
 
-  // move enemy
+  // handle off-road behaviour
+  // ------------------------------
+  checkOffRoad();
+  // -------------------------------------------------
+
+  /* debug characters */
+  // drawDebug(enemy); drawDebug(playerActor);
+
+  // enemy movement &
+  // player controls
+  // -------------------------------------------------
   enemies.forEach((enemy) => {
-    /* debug characters */
-    // drawDebug(enemy); drawDebug(playerActor);
-
     // control playerActor
     if (keyIsDown(37)) playerActor.x -= playerActorMoveDistance; // left
     if (keyIsDown(39)) playerActor.x += playerActorMoveDistance; // right
+
+    // Handle enemy collisions
+    for (let i = 0; i < enemies.length; i++) {
+      for (let j = i + 1; j < enemies.length; j++) {
+        handleCollision(enemies[i], enemies[j]);
+      }
+    }
 
     /* check collision */
     // near miss
@@ -172,9 +260,6 @@ function playGame() {
       enemy.y += enemy.gravity;
     } else {
       // turn both actors red
-      background_color = "#fff";
-      playerActor.bgcolor = "red";
-      enemy.bgcolor = "red";
       // game over (it will update gameState respectively)
       gameOver();
     }
@@ -197,6 +282,122 @@ function playGame() {
       resetEnemy(enemy);
     }
   });
+  // -------------------------------------------------
+}
+function applyVisualEffect(actor, effectDuration = 500) {
+  // Save original styles
+  actor.originalBgColor = actor.bgcolor;
+  actor.bgcolor = "rgba(255, 0, 255, 0.8)"; // Purple glow effect
+
+  // Optional: Add other visual effects like size or animation
+  actor.isGlowing = true;
+
+  // Revert after the effect duration
+  setTimeout(() => {
+    actor.bgcolor = actor.originalBgColor;
+    actor.isGlowing = false;
+  }, effectDuration);
+}
+
+function toggleBool(bool) {
+  return !bool;
+}
+
+function handleKeyEvents(key) {
+  // pausing the game
+  if (key === " " || key.toLowerCase() === "p") {
+    // pausing the game
+    gameState.running = gameState.paused;
+    gameState.over = false;
+    gameState.paused = !gameState.paused;
+    console.log(gameState);
+  }
+
+  // restarting the game
+  if (key == "r") {
+    attempts += 1;
+    if (attempts > 3) {
+      console.log("[+] Max attempts reached, Refresh or Start New Game..");
+    } else {
+      restartGame();
+    }
+  }
+
+  // increase player speed
+  // if (keyIsDown(65)) playerSpeed += 0.12; // a/A key
+}
+
+// Trigger key events only once per press
+function keyPressed() {
+  handleKeyEvents(key);
+}
+
+// Function to handle collision resolution between enemies
+function handleCollision(enemyA, enemyB) {
+  // If there is a collision
+  if (isColliding(enemyA, enemyB)) {
+    // Set enemy B to semi-transparent
+    enemyB.isTransparent = true;
+    enemyB.originalColor = enemyB.bgcolor; // Store the original color
+    enemyB.bgcolor = "rgba(223, 234, 249, 0.5)"; // Set semi-transparent color
+
+    // Set a timeout to restore the color after 500ms (or any duration you prefer)
+    setTimeout(() => {
+      enemyB.bgcolor = enemyB.originalColor; // Restore original color
+      enemyB.isTransparent = false; // Reset transparency state
+    }, 10);
+  }
+}
+
+function isColliding(enemy1, enemy2) {
+  return (
+    enemy1.x < enemy2.x + enemy2.w &&
+    enemy1.x + enemy1.w > enemy2.x &&
+    enemy1.y < enemy2.y + enemy2.h &&
+    enemy1.y + enemy1.h > enemy2.y
+  );
+}
+
+function updateScore(points) {
+  score += points; // Update score globally
+  if (score < 0) score = 0; // Prevent negative score
+}
+
+function checkOffRoad() {
+  const leftLimit = 0 - playerActor.w * 3;
+  const rightLimit = _w + playerActor.w * 3;
+  const penalty = 0.15; // 15% decrease in score
+
+  if (playerActor.x < 0 || playerActor.x > _w - playerActor.w) {
+    updateScore(-penalty);
+    updatePenalties(penalty);
+    if (reputationScore > 0) background_color = "#ff510080"; // Flash orange background
+    if (reputationScore == 0) background_color = "#ff000080"; // Flash red background
+  } else {
+    background_color = "#f99406"; // Reset background color to original
+  }
+}
+
+function updatePenalties(penalty) {
+  // Add the penalty to offScreenPenalties
+  offScreenPenalties += penalty;
+
+  // Use reputationScore to offset penalties
+  if (reputationScore > 0) {
+    if (offScreenPenalties >= reputationScore) {
+      offScreenPenalties -= reputationScore; // Offset penalties by reputation
+      reputationScore = 0; // Fully consumed
+    } else {
+      reputationScore -= offScreenPenalties; // Partially consume reputation
+      offScreenPenalties = 0; // Fully offset penalties
+    }
+  }
+
+  // Check if penalties exceed maximum allowed
+  if (offScreenPenalties > maxOffScreenPenalties + 1) {
+    offScreenPenalties = maxOffScreenPenalties; // Clamp to max
+    gameOver(); // Trigger game over if max reached
+  }
 }
 
 function generateEnemy() {
@@ -206,7 +407,7 @@ function generateEnemy() {
   do {
     // Generate a random position for the new enemy
     newEnemy = {
-      x: random(0, _w),
+      x: random(0 - enemyActor.w / 2, _w + enemyActor.w / 2), // Allow rogue spawns
       y: 0 - random(0, _h * 0.4),
       w: 50 * size_factor.w,
       h: 50 * size_factor.h,
@@ -234,9 +435,9 @@ function resetEnemy(enemy) {
 
   do {
     // Reset the enemy's position to a random spot at the top of the screen
-    enemy.x = random(0, _w);
-    enemy.y = 0 - random(0, _h * 0.4); // Resetting above the screen to fall again
-    enemy.bgcolor = "#066CF9";
+    (enemy.x = random(0 - enemyActor.w / 2, _w + enemyActor.w / 2)), // Allow rogue spawns
+      (enemy.y = 0 - random(0, _h * 0.4)); // Resetting above the screen to fall again
+    enemy.bgcolor = "rgb(6, 108, 249)";
     enemy.gravity = int(random(min_gravity, max_gravity)) * playerSpeed;
     enemy.nearMissed = false;
 
@@ -253,6 +454,38 @@ function resetEnemy(enemy) {
   // You can add any additional reset logic here, such as resetting speeds, colors, etc.
 }
 
+function generatePackage() {
+  // packageActor = {
+  //   x: _w * 0.5,
+  //   y: _h * 0.1,
+  //   w: 20 * size_factor.w,
+  //   h: 20 * size_factor.w,
+  //   bgcolor: "rgb(208, 0, 255)",
+  //   gravity: 1,
+  // };
+  do {
+    // Reset the enemy's position to a random spot at the top of the screen
+    packageActor.x = random(packageActor.w, _w - packageActor.w); // Allow rogue spawns
+    packageActor.y = 0 - random(0, _h * 0.4); // Resetting above the screen to fall again
+    packageActor.w = 20 * size_factor.w;
+    packageActor.h = 20 * size_factor.w;
+    packageActor.bgcolor = "rgb(208, 0, 255)";
+    packageActor.gravity = int(random(min_gravity, max_gravity)) * playerSpeed;
+
+    // Check for collision with other enemies
+    collisionDetected = false;
+    for (let otherEnemy of enemies) {
+      if (collides(packageActor, otherEnemy)) {
+        collisionDetected = true;
+        break; // Exit the loop and regenerate position if collision is detected
+      }
+    }
+  } while (collisionDetected); // Keep retrying until no collision is detected
+
+  packageGenerated = true;
+  console.log("package generated");
+}
+
 function displayScorePopups() {
   for (let i = scorePopups.length - 1; i >= 0; i--) {
     let popup = scorePopups[i];
@@ -267,6 +500,8 @@ function displayScorePopups() {
     textSize(currentSize); // Dynamically set text size
     textAlign(CENTER);
     text(popup.points, popup.x, popup.y);
+    noStroke();
+    noFill();
 
     // Update position and fade out
     popup.y -= 5; // Float upwards
@@ -279,16 +514,44 @@ function displayScorePopups() {
 }
 
 function displayHUD() {
-  textAlign(CENTER);
   fill(255);
+  stroke("#000");
 
   // global score
   textSize(42);
-  text(`Score: ${score}`, 120, 80); // Top right for score
+  textAlign(LEFT);
+  text(`Score: ${Math.floor(score)}`, 30, 80); // Top right for score
+
+  // reputation score
+  textAlign(LEFT);
+  textSize(32);
+  text(`Rep Score: ${Math.floor(reputationScore)}`, 30, 140); // Top right for score
+
+  // reputation score
+  textAlign(LEFT);
+  textSize(32);
+  text(`Attempt: ${Math.floor(attempts)}`, 30, 200); // Top right for score
 
   // near misses
+  textAlign(CENTER);
   textSize(32);
-  text(`x${nearMisses}`, _w - 60, 80); // Top right for near misses
+  text(`x${Math.floor(nearMisses)}`, _w - 60, 80); // Top right for near misses
+
+  // off-screen penalties
+  textAlign(CENTER);
+  textSize(32);
+  if (offScreenPenalties == 0) {
+    fill("#199f28");
+  } else {
+    fill("#eb6b34"); // dark orange
+  }
+  text(
+    `${offScreenPenalties > 0 ? "off-road " : ""}${Math.floor(
+      offScreenPenalties
+    )}`,
+    _w - 120,
+    120
+  ); // Top right for offscreen penalties
 }
 
 function drawPlayer(playerActor) {
@@ -307,6 +570,14 @@ function drawEnemyActor(enemyActor) {
   rect(e.x, e.y, e.w, e.h);
 }
 
+function drawPackageActor(packageActor) {
+  var p = packageActor;
+  stroke("#000");
+  strokeWeight(5);
+  fill(p.bgcolor);
+  rect(p.x, p.y, p.w, p.h);
+}
+
 function drawNPC(npc) {
   var n = npc;
   stroke("#000");
@@ -316,10 +587,17 @@ function drawNPC(npc) {
 }
 
 function gameOver() {
+  background_color = "#fff";
+  playerActor.bgcolor = "red";
   // update the states
   gameState.running = !gameState.running;
   gameState.over = true;
   gameState.paused = false;
+  // game over text
+  textSize(82);
+  fill("#eb6b34"); // dark orange
+  text("Game Over", _w / 2, _h / 2); // Top right for offscreen penalties
+
   noLoop();
 }
 
