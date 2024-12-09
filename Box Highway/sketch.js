@@ -1,9 +1,14 @@
+var _random = new RandomClass(); // use this random (no p5 random)
+
 var ar = { w: 9, h: 16 }; // aspect ratio
 var _w = 800;
 var _h = (_w * ar.h) / ar.w;
-var background_color = "rgb(120,120,212)";
-background_color = "#f994068c";
-background_color = "#f99406";
+
+var palette = _random.list(palettes); // select with the seeded random
+// palette = palettes[0];
+
+var background_color;
+background_color = palette.background;
 
 // characters
 var size_factor = { w: 2, h: 3 };
@@ -12,7 +17,7 @@ var playerActor = {
   y: _h * 0.8,
   w: 50 * size_factor.w,
   h: 50 * size_factor.h,
-  bgcolor: "rgb(232,230,226)",
+  bgcolor: palette.opaquePlayerColor,
   gravity: 0,
 };
 var enemyActor = {
@@ -20,7 +25,7 @@ var enemyActor = {
   y: _h * 0.1,
   w: 50 * size_factor.w,
   h: 50 * size_factor.h,
-  bgcolor: "rgb(0,253,255)",
+  bgcolor: palette.opaqueEnemyColor,
   gravity: 1,
   nearMissed: false,
 };
@@ -29,7 +34,7 @@ var packageActor = {
   y: _h * 0.1,
   w: 20 * size_factor.w,
   h: 20 * size_factor.w,
-  bgcolor: "rgb(208, 0, 255)",
+  bgcolor: palette.packageColor,
   gravity: 1,
   isCollected: false,
 };
@@ -38,23 +43,26 @@ var npcOne = {
   y: _h * 0.1,
   w: 10 * size_factor.w,
   h: 60 * size_factor.h,
-  bgcolor: "rgb(255,221,0)",
+  bgcolor: palette.npcColor,
   gravity: 15,
 };
 var npcs = [];
 var enemies = [];
 var max_enemies = 3;
 var max_npcs = 3;
+var enableStroke = false;
 
 // movement
 var gravity = 1;
 var min_gravity = 15;
 var max_gravity = 25;
 var playerActorMoveDistance = 5; // 5 - standard
-var playerSpeed = 1;
+var playerSpeed = 1.1;
+// playerSpeed = 1.1;
 
 // ui
-var score = 0; // score = 2000;
+var score = 0;
+// score = 2000;
 var scorePopups = [];
 var nearMissPoints = 20;
 var nearMisses = 0;
@@ -62,19 +70,43 @@ var offScreenPenalties = 0;
 var maxOffScreenPenalties = 100; // before game over
 var reputationScore = 0;
 var repScorePoints = 50; // by default
+var reputationForScorePercentage;
 
 // other
 var debugMode = false;
-var gameState = { running: true, over: false, paused: false };
+var gameState = {
+  preStart: true,
+  running: false,
+  over: false,
+  paused: false,
+};
 var packageGenerated = false;
-var packageGenerationProbability = 0.05; // 5 % // packageGenerationProbability = 0.8;
+var packageGenerationProbability = 0.03; // 3 % // packageGenerationProbability = 0.8;
+packageGenerationProbability = 0.2;
 var packageGenerationRandom = 0.5; // initial
 var packageGenerationInterval = setInterval(() => {
-  packageGenerationRandom = Math.random();
-  console.log("package gen. random: ", packageGenerationRandom);
+  packageGenerationRandom = _random.random();
+  // console.log("package gen. random: ", packageGenerationRandom);
 }, 1000 /* every 3 seconds */);
 var attempts = 1;
 var maxRestarts = 3; // until scores expire
+// for enemy position generations (according to difficulty, to make it fair to all players)
+var distanceFactor;
+var demo = true; // free trial of the game
+var buffer; // buffer canvas
+
+// sound effects
+let audioStarted = false;
+let packageCollectionSound;
+let crashSound;
+let gameMusic;
+let gameMusicOne;
+
+function preload() {
+  packageCollectionSound = loadSound("sounds/coin10.wav");
+  crashSound = loadSound("sounds/click.wav");
+  gameMusic = loadSound("music/hyperflight.wav");
+}
 
 function restartGame() {
   if (attempts > maxRestarts) {
@@ -83,29 +115,53 @@ function restartGame() {
     reputationScore = 0;
     nearMisses = 0;
     offScreenPenalties = 0;
+    gameState.preStart = true;
+    attempts = 1;
+  }
+
+  // this line needs testing
+  if (attempts < maxRestarts && offScreenPenalties === maxOffScreenPenalties) {
+    offScreenPenalties = 0;
   }
   // scorePopups = [];
   npcs = [];
   enemies = [];
-  gameState = { running: true, over: false, paused: false };
+
+  // set the game states gameState
+  gameState.preStart = false;
+  gameState.running = true;
+  gameState.over = false;
+  gameState.paused = false;
+
   playerActor = {
     x: _w * 0.5,
     y: _h * 0.8,
     w: 50 * size_factor.w,
     h: 50 * size_factor.h,
-    bgcolor: "rgb(232,230,226)",
+    bgcolor: palette.opaquePlayerColor,
     gravity: 0,
   };
   packageGenerated = false;
   setup(); // Reinitialize game setup
   draw();
   loop();
+  if (gameMusic && !gameMusic.isPlaying()) gameMusic.play();
 }
 
 function setup() {
   createCanvas(_w, _h);
+  buffer = createGraphics(_w * 0.7, _h * 0.12);
   noStroke();
   // initial settings
+  reputationForScorePercentage = map(
+    packageGenerationProbability,
+    0.03 /* from 3% */,
+    0.8 /* to 80% */,
+    0.9 /* from 90% */,
+    0.05 /* to 5%*/
+  );
+  distanceFactor = _random.floorFn(map(playerSpeed, 1, 1.8, 1, 6));
+  // maxRestarts = _random.floorFn(map(playerSpeed, 1, 2, 3, 8));
   playerActor.x = (_w - playerActor.w) / 2;
   // packageActor.x = (_w - playerActor.w) / 2;
   // create enemies
@@ -122,18 +178,20 @@ function setup() {
       y: _height,
       w: npcOne.w,
       h: 60 * size_factor.h,
-      // bgcolor: "rgb(255,221,0)",
-      bgcolor: "rgb(59,59,58)",
+      bgcolor: palette.npcColor,
       gravity: npcOne.gravity * playerSpeed,
     });
   }
+
+  // play game music in a loop
+  // if (gameMusic) gameMusic.loop();
 }
 
 function draw() {
   background(background_color);
 
   // debug
-  if (debugMode) enemies.forEach(drawDebug);
+  // if (debugMode) enemies.forEach(drawDebug);
 
   // 1) display npcs
   npcs.forEach((npc) => drawNPC(npc));
@@ -157,15 +215,32 @@ function draw() {
 
   // game logic
   playGame();
+
+  if (gameState.running === false || gameState.paused === true) {
+    if (gameMusic) gameMusic.pause(); // pause music
+  }
+
+  // Show "Press SPACE to Start" message in the pre-start state
+  if (gameState.preStart) {
+    textAlign(CENTER, CENTER);
+    textSize(72);
+    fill(palette.hudTextColor);
+    stroke("#000");
+    strokeWeight(5);
+    text("Press SPACE to Start", width / 2, height / 2);
+    noStroke();
+    return; // Exit draw loop until the game starts
+  }
 }
 
 function playGame() {
-  if (!gameState.running) return; // Skip logic if paused or over
-
+  if (!gameState.running) {
+    return; // Skip logic if paused or over
+  }
   // handle packages
   // ------------------
   // generate packages
-  var r = random();
+  // var r = random();
   if (
     !packageGenerated &&
     packageGenerationRandom < packageGenerationProbability
@@ -179,7 +254,13 @@ function playGame() {
 
     // check collision
     if (collides(packageActor, playerActor) && !packageActor.isCollected) {
-      applyVisualEffect(playerActor);
+      applyVisualEffect(playerActor); // to the playerActor
+
+      // play sound
+      if (packageCollectionSound) packageCollectionSound.play();
+
+      packageActor.y = _h + 100; // make it disappear
+
       reputationScore += repScorePoints;
       // do some math (offScreenPenalties & reputationScore)
       if (offScreenPenalties >= reputationScore) {
@@ -259,6 +340,9 @@ function playGame() {
     if (!collides(enemy, playerActor)) {
       enemy.y += enemy.gravity;
     } else {
+      finalScoreCalculation();
+      // play sound
+      if (crashSound) crashSound.play();
       // turn both actors red
       // game over (it will update gameState respectively)
       gameOver();
@@ -266,7 +350,7 @@ function playGame() {
 
     // if enemies pass (reset enemies here)
     if (enemy.y > _h) {
-      let points = Math.floor(enemy.gravity / 10);
+      let points = _random.floorFn(enemy.gravity / 10);
       score += points;
 
       // Add new popup near playerActor
@@ -284,10 +368,11 @@ function playGame() {
   });
   // -------------------------------------------------
 }
+
 function applyVisualEffect(actor, effectDuration = 500) {
   // Save original styles
   actor.originalBgColor = actor.bgcolor;
-  actor.bgcolor = "rgba(255, 0, 255, 0.8)"; // Purple glow effect
+  actor.bgcolor = palette.packagePlayerColor; // Purple glow effect
 
   // Optional: Add other visual effects like size or animation
   actor.isGlowing = true;
@@ -304,27 +389,47 @@ function toggleBool(bool) {
 }
 
 function handleKeyEvents(key) {
-  // pausing the game
-  if (key === " " || key.toLowerCase() === "p") {
-    // pausing the game
-    gameState.running = gameState.paused;
-    gameState.over = false;
-    gameState.paused = !gameState.paused;
-    console.log(gameState);
-  }
+  if (key === " ") {
+    if (!gameState.running && !gameState.over && gameState.preStart) {
+      // Start the game
+      console.log("Game started");
+      gameState.preStart = false; // now that it has started
+      gameState.running = true;
+      gameState.paused = false;
+      gameState.over = false;
+      if (gameMusic) gameMusic.loop();
+    } else if (gameState.running) {
+      // Pause the game
+      console.log("Game paused");
+      gameState.preStart = false;
+      gameState.running = false;
+      gameState.paused = true;
+      // if (gameMusic) gameMusic.pause();
+    } else if (gameState.paused) {
+      // Resume the game
+      console.log("Game resumed");
+      gameState.preStart = false;
+      gameState.running = true;
+      gameState.paused = false;
+      if (gameMusic) gameMusic.play();
+    } else if (gameState.over) {
+      attempts += 1;
+      if (attempts > maxRestarts) {
+        if (gameMusic) gameMusic.stop();
+        console.log("[+] Max attempts reached, Refresh or Start New Game..");
 
-  // restarting the game
-  if (key == "r") {
-    attempts += 1;
-    if (attempts > 3) {
-      console.log("[+] Max attempts reached, Refresh or Start New Game..");
-    } else {
-      restartGame();
+        if (demo) {
+          // trial
+          attempts = maxRestarts + 1; // Reset attempts counter
+          restartGame();
+        }
+      } else {
+        // Restart the game
+        console.log("Game restarted");
+        restartGame();
+      }
     }
   }
-
-  // increase player speed
-  // if (keyIsDown(65)) playerSpeed += 0.12; // a/A key
 }
 
 // Trigger key events only once per press
@@ -339,7 +444,7 @@ function handleCollision(enemyA, enemyB) {
     // Set enemy B to semi-transparent
     enemyB.isTransparent = true;
     enemyB.originalColor = enemyB.bgcolor; // Store the original color
-    enemyB.bgcolor = "rgba(223, 234, 249, 0.5)"; // Set semi-transparent color
+    enemyB.bgcolor = palette.transparentEnemyColor; // Set semi-transparent color
 
     // Set a timeout to restore the color after 500ms (or any duration you prefer)
     setTimeout(() => {
@@ -363,6 +468,14 @@ function updateScore(points) {
   if (score < 0) score = 0; // Prevent negative score
 }
 
+function isOffScreen(playerActor) {
+  if (playerActor.x < 0 || playerActor.x > _w - playerActor.w) {
+    return true;
+  } else {
+    return false;
+  } // Return true if off-screen, false otherwise
+}
+
 function checkOffRoad() {
   const leftLimit = 0 - playerActor.w * 3;
   const rightLimit = _w + playerActor.w * 3;
@@ -371,10 +484,13 @@ function checkOffRoad() {
   if (playerActor.x < 0 || playerActor.x > _w - playerActor.w) {
     updateScore(-penalty);
     updatePenalties(penalty);
-    if (reputationScore > 0) background_color = "#ff510080"; // Flash orange background
-    if (reputationScore == 0) background_color = "#ff000080"; // Flash red background
+    // Flash orange background
+    if (reputationScore > 0)
+      background_color = palette.reputationOffScreenFlash;
+    // Flash red background
+    if (reputationScore == 0) background_color = palette.offScreenFlash;
   } else {
-    background_color = "#f99406"; // Reset background color to original
+    background_color = palette.background; // Reset background color to original
   }
 }
 
@@ -407,12 +523,12 @@ function generateEnemy() {
   do {
     // Generate a random position for the new enemy
     newEnemy = {
-      x: random(0 - enemyActor.w / 2, _w + enemyActor.w / 2), // Allow rogue spawns
-      y: 0 - random(0, _h * 0.4),
+      x: _random.range(0 - enemyActor.w / 2, _w + enemyActor.w / 2), // Allow rogue spawns
+      y: 0 - _random.range(0, _h * 0.4) * distanceFactor,
       w: 50 * size_factor.w,
       h: 50 * size_factor.h,
-      bgcolor: "#066CF9",
-      gravity: int(random(min_gravity, max_gravity)) * playerSpeed,
+      bgcolor: palette.opaqueEnemyColor,
+      gravity: int(_random.range(min_gravity, max_gravity)) * playerSpeed,
     };
 
     collisionDetected = false;
@@ -435,10 +551,10 @@ function resetEnemy(enemy) {
 
   do {
     // Reset the enemy's position to a random spot at the top of the screen
-    (enemy.x = random(0 - enemyActor.w / 2, _w + enemyActor.w / 2)), // Allow rogue spawns
-      (enemy.y = 0 - random(0, _h * 0.4)); // Resetting above the screen to fall again
-    enemy.bgcolor = "rgb(6, 108, 249)";
-    enemy.gravity = int(random(min_gravity, max_gravity)) * playerSpeed;
+    enemy.x = _random.range(0 - enemyActor.w / 2, _w + enemyActor.w / 2); // Allow rogue spawns
+    enemy.y = 0 - _random.range(0, _h * 0.4) * distanceFactor; // Resetting above the screen to fall again
+    enemy.bgcolor = palette.opaqueEnemyColor;
+    enemy.gravity = int(_random.range(min_gravity, max_gravity)) * playerSpeed;
     enemy.nearMissed = false;
 
     // Check for collision with other enemies
@@ -455,22 +571,15 @@ function resetEnemy(enemy) {
 }
 
 function generatePackage() {
-  // packageActor = {
-  //   x: _w * 0.5,
-  //   y: _h * 0.1,
-  //   w: 20 * size_factor.w,
-  //   h: 20 * size_factor.w,
-  //   bgcolor: "rgb(208, 0, 255)",
-  //   gravity: 1,
-  // };
   do {
     // Reset the enemy's position to a random spot at the top of the screen
-    packageActor.x = random(packageActor.w, _w - packageActor.w); // Allow rogue spawns
-    packageActor.y = 0 - random(0, _h * 0.4); // Resetting above the screen to fall again
+    packageActor.x = _random.range(packageActor.w, _w - packageActor.w); // Allow rogue spawns
+    packageActor.y = 0 - _random.range(0, _h * 0.4); // Resetting above the screen to fall again
     packageActor.w = 20 * size_factor.w;
     packageActor.h = 20 * size_factor.w;
-    packageActor.bgcolor = "rgb(208, 0, 255)";
-    packageActor.gravity = int(random(min_gravity, max_gravity)) * playerSpeed;
+    packageActor.bgcolor = palette.packageColor;
+    packageActor.gravity =
+      int(_random.range(min_gravity, max_gravity)) * playerSpeed;
 
     // Check for collision with other enemies
     collisionDetected = false;
@@ -492,7 +601,7 @@ function displayScorePopups() {
     let c = popup.color; // array of r,g,b values
 
     // Gradually reduce text size based on remaining alpha
-    let currentSize = map(popup.alpha, 0, 255, 10, 33); // Map alpha to text size
+    let currentSize = map(popup.alpha, 0, 255, 10, 43); // Map alpha to text size
 
     // fill(c[0], c[1], c[2], popup.alpha); // Fade out effect
     stroke(`rgba(0, 0, 0, ${popup.alpha / 255})`);
@@ -514,49 +623,51 @@ function displayScorePopups() {
 }
 
 function displayHUD() {
-  fill(255);
+  fill(palette.hudTextColor);
   stroke("#000");
 
   // global score
   textSize(42);
   textAlign(LEFT);
-  text(`Score: ${Math.floor(score)}`, 30, 80); // Top right for score
+  text(`Score: ${_random.floorFn(score)}`, 30, 80); // Top right for score
 
   // reputation score
   textAlign(LEFT);
   textSize(32);
-  text(`Rep Score: ${Math.floor(reputationScore)}`, 30, 140); // Top right for score
+  text(`Reputation: ${_random.floorFn(reputationScore)}`, 30, 140); // Top right for score
 
-  // reputation score
+  // attempts
   textAlign(LEFT);
-  textSize(32);
-  text(`Attempt: ${Math.floor(attempts)}`, 30, 200); // Top right for score
+  textSize(52);
+  text(`${_random.floorFn(attempts)}/${maxRestarts}`, 30, 200); // Top right for score
 
   // near misses
   textAlign(CENTER);
   textSize(32);
-  text(`x${Math.floor(nearMisses)}`, _w - 60, 80); // Top right for near misses
+  text(`x${_random.floorFn(nearMisses)}`, _w - 60, 80); // Top right for near misses
 
   // off-screen penalties
   textAlign(CENTER);
   textSize(32);
   if (offScreenPenalties == 0) {
-    fill("#199f28");
+    fill(palette.offScreenHudGood);
   } else {
-    fill("#eb6b34"); // dark orange
+    fill(palette.offScreenHudBad); // dark orange
   }
   text(
-    `${offScreenPenalties > 0 ? "off-road " : ""}${Math.floor(
+    `${offScreenPenalties > 0 ? "off-road " : ""}${_random.floorFn(
       offScreenPenalties
     )}`,
     _w - 120,
     120
   ); // Top right for offscreen penalties
+
+  noStroke();
 }
 
 function drawPlayer(playerActor) {
   var p = playerActor;
-  stroke("#000");
+  if (enableStroke) stroke("#000");
   strokeWeight(5);
   fill(p.bgcolor);
   rect(p.x, p.y, p.w, p.h);
@@ -564,7 +675,7 @@ function drawPlayer(playerActor) {
 
 function drawEnemyActor(enemyActor) {
   var e = enemyActor;
-  stroke("#000");
+  if (enableStroke) stroke("#000");
   strokeWeight(5);
   fill(e.bgcolor);
   rect(e.x, e.y, e.w, e.h);
@@ -572,7 +683,7 @@ function drawEnemyActor(enemyActor) {
 
 function drawPackageActor(packageActor) {
   var p = packageActor;
-  stroke("#000");
+  if (enableStroke) stroke("#000");
   strokeWeight(5);
   fill(p.bgcolor);
   rect(p.x, p.y, p.w, p.h);
@@ -580,24 +691,62 @@ function drawPackageActor(packageActor) {
 
 function drawNPC(npc) {
   var n = npc;
-  stroke("#000");
+  if (enableStroke) stroke("#000");
   strokeWeight(5);
   fill(n.bgcolor);
   rect(n.x, n.y, n.w, n.h);
 }
 
+function finalScoreCalculation() {
+  if (gameState.over) {
+    var bonusPoints = nearMisses * 5;
+    score += reputationForScorePercentage * reputationScore + bonusPoints;
+  }
+}
+
 function gameOver() {
-  background_color = "#fff";
-  playerActor.bgcolor = "red";
   // update the states
   gameState.running = !gameState.running;
   gameState.over = true;
   gameState.paused = false;
+
+  // display buffer only when game is over
+  if (
+    (attempts === maxRestarts && offScreenPenalties >= maxOffScreenPenalties) ||
+    attempts === maxRestarts
+  ) {
+    // game over
+
+    // update of the global score
+    if (
+      offScreenPenalties === maxOffScreenPenalties ||
+      (offScreenPenalties > 0 && isOffScreen(playerActor))
+    ) {
+      buffer.background(palette.bufferOffScreenFlash);
+    } else {
+      buffer.background(palette.bufferBackground);
+    }
+    buffer.fill(palette.hudTextColor);
+    buffer.stroke("#000");
+    buffer.strokeWeight(5);
+    buffer.textSize(32);
+    buffer.textAlign(LEFT);
+    buffer.text(`Final Score `, 30, 80); // Top right for score
+    buffer.textSize(42);
+    buffer.textAlign(LEFT);
+    buffer.text(`${_random.floorFn(score)}`, 30, 140); // Top right for score
+    buffer.noStroke();
+    image(buffer, 0, 0);
+  }
+
   // game over text
   textSize(82);
-  fill("#eb6b34"); // dark orange
-  text("Game Over", _w / 2, _h / 2); // Top right for offscreen penalties
-
+  stroke("#000");
+  fill(palette.gameOverText); // dark orange
+  var textValue = "";
+  textValue = attempts < maxRestarts ? "Try Again" : "Game Over";
+  text(textValue, _w / 2, _h / 2); // Top right for offscreen penalties
+  noStroke();
   noLoop();
 }
 
